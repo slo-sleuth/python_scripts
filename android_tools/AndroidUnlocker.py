@@ -199,8 +199,8 @@ def main():
     print('\nProcessing:')
 
     # open file and process on page at a time
-    with open(args.BIN, 'rb') as f:
-        mm = mmap.mmap(f.fileno(), 0, prot=mmap.PROT_READ)
+    with open(args.BIN, 'r+b') as f:
+        mm = mmap.mmap(f.fileno(), 0)
 
     gesture_dict  = {}
     password_dict = {}
@@ -266,7 +266,7 @@ def main():
 
     message = 0
     for gesture in gesture_dict.keys():
-        pattern = gesture_lookup(gesture, args.gesture)
+        pattern = gesture_lookup(gesture, db)
         if pattern:
             print()
             print('gesture.key: \t{}\nPattern: \t{}'.format(gesture, pattern))
