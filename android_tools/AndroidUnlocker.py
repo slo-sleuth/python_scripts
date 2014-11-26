@@ -19,7 +19,7 @@
 
 version = "1.4"
 
-import argparse, sys, re, mmap, sqlite3, itertools
+import argparse, sys, re, sqlite3, itertools
 from binascii import hexlify
 from datetime import datetime
 from struct import pack
@@ -199,7 +199,7 @@ def main():
     print('\nProcessing:')
 
     # open file and process on page at a time
-    with open(args.BIN, 'r+b') as f:
+    with open(args.BIN, 'rb') as f:
         #mm = mmap.mmap(f.fileno(), 0)
         mm = f.read()
 
