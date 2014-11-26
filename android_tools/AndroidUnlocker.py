@@ -199,17 +199,21 @@ def main():
     print('\nProcessing:')
 
     # open file and process on page at a time
-    with open(args.BIN, 'rb') as f:
-        #mm = mmap.mmap(f.fileno(), 0)
-        mm = f.read()
+    file_obj =  open(args.BIN, 'rb') 
 
     gesture_dict  = {}
     password_dict = {}
     salt_dict     = {}
 
-    for offset in range(0, len(mm), block_sz) :
-        block = mm[offset: offset + block_sz]
-
+    #~ for offset in range(0, len(mm), block_sz) :
+        #~ block = mm[offset: offset + block_sz]
+    
+    while True:
+        offset = file_obj.tell()
+        block = file_obj.read(block_sz)
+        if not block:
+            break
+            
         if args.password:
             password = find_password_hash(block[:128])
             if password:
