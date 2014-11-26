@@ -200,13 +200,14 @@ def main():
 
     # open file and process on page at a time
     with open(args.BIN, 'r+b') as f:
-        mm = mmap.mmap(f.fileno(), 0)
+        #mm = mmap.mmap(f.fileno(), 0)
+        mm = f.read()
 
     gesture_dict  = {}
     password_dict = {}
     salt_dict     = {}
 
-    for offset in range(0, mm.size(), block_sz) :
+    for offset in range(0, len(mm), block_sz) :
         block = mm[offset: offset + block_sz]
 
         if args.password:
