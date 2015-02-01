@@ -264,8 +264,8 @@ def main():
 
     for salt in salt_dict.keys():
         print()
-        salt_hex = hexlify(pack('>q', salt)).decode()
-        print('SALT: \t\t{}\nSALT Hex:\t{}'.format(salt, salt_hex))
+        salt_hex = hexlify(pack('>q', salt)).decode().lstrip('0')
+        print('SALT: \t\t{}\nSALT Hex:\t{}'.format(salt, salt_hex)
         offsets = ', '.join(str(x) for x in salt_dict[salt])
         print('Offset(s):\t{}'.format(offsets))
 
