@@ -10,7 +10,7 @@
 
 #: Copyright: 2014 "John Lehr" <slo.sleuth@gmail.com>
 
-# 2014-03-26    v1.5  Fix for detecting AndroidGesturePatternTable.sqlite
+# 2015-03-26    v1.5  Fix for detecting AndroidGesturePatternTable.sqlite
 # 2014-11-04    v1.4  General code cleanup, truncated salt detection
 # 2014-03-24    v1.3  Bugfix for salt detection, added field length reading
 # 2013-12-18    v1.2  Bugfix in password dictionary
