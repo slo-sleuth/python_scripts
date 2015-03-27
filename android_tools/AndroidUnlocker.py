@@ -10,6 +10,7 @@
 
 #: Copyright: 2014 "John Lehr" <slo.sleuth@gmail.com>
 
+# 2014-03-26    v1.5  Fix for detecting AndroidGesturePatternTable.sqlite
 # 2014-11-04    v1.4  General code cleanup, truncated salt detection
 # 2014-03-24    v1.3  Bugfix for salt detection, added field length reading
 # 2013-12-18    v1.2  Bugfix in password dictionary
@@ -19,7 +20,7 @@
 
 version = "1.4"
 
-import argparse, sys, re, sqlite3, itertools
+import argparse, sys, re, sqlite3, itertools, os
 from binascii import hexlify
 from datetime import datetime
 from struct import pack
@@ -186,7 +187,8 @@ def main():
     # locate rainbow table for gesture lookup
     if args.gesture:
         # first check in current path of script
-        db = path.split(sys.argv[0])[0] + '/AndroidGesturePatternTable.sqlite'
+        script_path = path.dirname(path.realpath(__file__))
+        db = script_path + path.sep + 'AndroidGesturePatternTable.sqlite'
 
         # if not in script path, raise a file selection box
         if not path.isfile(db):
