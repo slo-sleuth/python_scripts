@@ -10,7 +10,7 @@
 
 #: Copyright: 2014 "John Lehr" <slo.sleuth@gmail.com>
 
-# 2015-06-06    v1.6  Fix for gesture.key detection
+# 2015-06-06    v1.6  Fix for gesture.key detection, false hit reporting
 # 2015-03-26    v1.5  Fix for detecting AndroidGesturePatternTable.sqlite
 # 2014-11-04    v1.4  General code cleanup, truncated salt detection
 # 2014-03-24    v1.3  Bugfix for salt detection, added field length reading
@@ -238,9 +238,10 @@ def main():
         if args.gesture:
             gesture = find_gesture_hash(block[:128])
             if gesture:
-                if gesture in gesture_dict.keys():
+                pattern = gesture_lookup(gesture, db)
+                if gesture in gesture_dict.keys() and pattern:
                     gesture_dict[gesture].append(offset)
-                else:
+                elif pattern:
                     gesture_dict[gesture] = [offset]
                     print('\tPossible gesture.key found at offset {}'.
                         format(offset))
