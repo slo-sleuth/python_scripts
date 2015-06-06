@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #: Title    : AndroidUnlocker.py
-#: Date     : 2014-11-04
+#: Date     : 2015-06-06
 #: Author   : "John Lehr" <slo.sleuth@gmail.com>
-#: Version  : 1.4
+#: Version  : 1.6
 #: License  : GPLv2 <http://www.gnu.org/licenses/gpl-2.0.html>
 #: Desc     : scan Android binary dump for gesture/password keys
 #: Depends  : python3-tk
 
 #: Copyright: 2014 "John Lehr" <slo.sleuth@gmail.com>
 
+# 2015-06-06    v1.6  Fix for gesture.key detection
 # 2015-03-26    v1.5  Fix for detecting AndroidGesturePatternTable.sqlite
 # 2014-11-04    v1.4  General code cleanup, truncated salt detection
 # 2014-03-24    v1.3  Bugfix for salt detection, added field length reading
@@ -18,7 +19,7 @@
 # 2013-12-02    v1.0  Added file selection dialogs
 # 2013-11-27    v1.0  Initial release
 
-version = "1.4"
+version = "1.6"
 
 import argparse, sys, re, sqlite3, itertools, os
 from binascii import hexlify
@@ -50,9 +51,9 @@ def find_gesture_hash(data):
     '30c70ca3ed4b3c56c326937024a5fea4f8c41360'
     '''
 
-    gesture_regex = re.compile(b'([\x01-\xFF]{20})\x00{108}')
+    gesture_regex = re.compile(b'(.{20})\x00{108}')
     match = gesture_regex.match(data)
-    if match:
+    if match and match.group(1) != b'\x00' * 20:
         return hexlify(match.group(1)).decode()
 
 def find_password_hash(data):
