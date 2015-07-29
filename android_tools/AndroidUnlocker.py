@@ -249,7 +249,7 @@ def main():
                 text = '\r  {}\n'.format(str(page).split(':')[0])
                 sys.stdout.write(text)
             if page.istruncatedsalt:
-                text = '\r  {}\n'.format(str(page, page.offset))
+                text = '\r  {}\n'.format(str(page).split(':')[0])
                 sys.stdout.write(text)
         count += 1
 
