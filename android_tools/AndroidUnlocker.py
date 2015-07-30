@@ -21,7 +21,7 @@ from datetime import datetime
 from struct import pack
 
 version = '2.0'
-pwd_regex = re.compile(b'([0-9A-F]{40})([0-9A-F]{32})?\x00{8}')
+pwd_regex = re.compile(b'([0-9A-F]{40})([0-9A-F]{32})')
 salt_regex = re.compile(b'lockscreen.password_salt(\-?[0-9]+)')
 
 class NandPage:
