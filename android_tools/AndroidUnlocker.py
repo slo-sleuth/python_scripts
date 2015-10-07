@@ -20,9 +20,11 @@ from binascii import hexlify
 from datetime import datetime
 from struct import pack
 
-version = '2.0'
+version = '2.1'
 pwd_regex = re.compile(b'([0-9A-F]{40})([0-9A-F]{32})?')
 salt_regex = re.compile(b'lockscreen.password_salt(\-?[0-9]+)')
+active_pwd_regex = re.compile(b'(<active-password)(.*?)(/>)')
+failed_pwd_regex = re.compile(b'(<failed-password-attempts)(.*?)(/>)')
 
 class NandPage:
     '''Class to search NAND pages from Android devices for hashes and salt
@@ -36,10 +38,14 @@ class NandPage:
         self.md5  = None
         self.salt = None
         self.salthex = None
+        self.active_pwd = None
+        self.failed_pwd = None
         self.isgesture = None
         self.ispassword = None
         self.issalt = None
         self.istruncatedsalt = None
+        self.isactivepwd = None
+        self.isfailedpwd = None
 
     def __str__(self):
         '''Return string representation of NandPage object.'''
@@ -55,6 +61,9 @@ class NandPage:
         if self.istruncatedsalt:
             text = 'truncated salt at offset {}: {}'.format(self.offset,
                     self.salt)
+        if self.isactivepwd or self.isfailedpwd:
+            text = 'device policies at offset {}: {}'.format(self.offset,
+                    self.active_pwd)
         return text
 
     def get_gesture(self, patterns):
@@ -115,6 +124,24 @@ class NandPage:
                 self.salt = int(salt)
         return
 
+    def get_device_policies(self):
+        '''Set device policies XML string (length, character types...) if page contains 
+        corresponding XML tags.'''
+        # device policies are contained in an XML file named device_policies.xml
+        # the password policies can be identified with the "<active-password" tag
+        match = active_pwd_regex.search(self.data)
+        # If device policies validated detected, update attributes
+        if match:
+            self.active_pwd = match.group(2).decode().strip()
+            self.isactivepwd = True
+        # the failed password attempts can be identified with the "<failed-password-attempts" tag
+        match = failed_pwd_regex.search(self.data)
+        # If device policies validated detected, update attributes
+        if match:
+            self.failed_pwd = match.group(2).decode().strip()
+            self.isfailedpwd = True
+        return
+        
 def build_pattern_dict():
     '''Return a dictionary of hash:pattern items for decoding gesture.key
     sha1 hash values.'''
@@ -233,23 +260,31 @@ def main():
             page.get_gesture(patterns)
             if page.isgesture:
                 add_value(results, page.sha1, (page, page.offset))
-                text = '\r  {}\n'.format(str(page).split(':')[0])
+                text = '\r    {}\n'.format(str(page).split(':')[0])
                 sys.stdout.write(text)
                 continue
         if args.password:
             page.get_password()
             if page.ispassword:
                 add_value(results, page.sha1, (page, page.offset))
+                text = '\r    {}\n'.format(str(page).split(':')[0])
+                sys.stdout.write(text)
+                continue
+
+            page.get_device_policies()
+            if page.isactivepwd or page.isfailedpwd:
+                add_value(results, "device_policies", (page, page.offset))
                 text = '\r  {}\n'.format(str(page).split(':')[0])
                 sys.stdout.write(text)
                 continue
+
             page.get_salt()
             if page.issalt:
                 add_value(results, page.salt, (page, page.offset))
-                text = '\r  {}\n'.format(str(page).split(':')[0])
+                text = '\r    {}\n'.format(str(page).split(':')[0])
                 sys.stdout.write(text)
             if page.istruncatedsalt:
-                text = '\r  {}\n'.format(str(page).split(':')[0])
+                text = '\r    {}\n'.format(str(page).split(':')[0])
                 sys.stdout.write(text)
         count += 1
 
@@ -279,6 +314,12 @@ def main():
             print('lockscreen.password_salt')
             print('Salt:    \t', page.salt)
             print('Salt Hex:\t', page.salthex)
+        if page.isactivepwd or page.isfailedpwd:
+            print('device_policies.xml')
+            if page.isactivepwd:    
+                print('active-password:\t\t', page.active_pwd)
+            if page.isfailedpwd:
+                print('failed-password-attempts:\t', page.failed_pwd)
         print('Offset(s):\t', ', '.join(str(offset) for offset in offsets))
 
         if page.ispassword and page.md5:
