@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #: Title    : AndroidUnlocker.py
-#: Date     : 2015-06-06
+#: Date     : 2015-10-26
 #: Author   : "John Lehr" <slo.sleuth@gmail.com>
-#: Version  : 1.6
+#: Version  : 1.7
 #: License  : GPLv2 <http://www.gnu.org/licenses/gpl-2.0.html>
 #: Desc     : scan Android binary dump for gesture/password keys
 #: Depends  : python3-tk
 
 #: Copyright: 2014 "John Lehr" <slo.sleuth@gmail.com>
 
+# 2015-10-26    v1.7  Fix for block_sz with spare are included in page
 # 2015-06-06    v1.6  Fix for gesture.key detection, false hit reporting
 # 2015-03-26    v1.5  Fix for detecting AndroidGesturePatternTable.sqlite
 # 2014-11-04    v1.4  General code cleanup, truncated salt detection
@@ -173,9 +174,12 @@ def main():
     args = parser.parse_args()
 
     # check user arguments
-    page_size = validate_page_size(args.size)
-    block_sz = args.size + args.spare
-
+    validate_page_size(args.size)
+    if args.spare:
+        block_sz = args.size + calculate_spare(args.size)
+    else:
+        block_sz = args.size
+        
     if not args.gesture and not args.password:
         print('\nerror: Search type not specified.  Select -g gesture or \
 -p password.')
