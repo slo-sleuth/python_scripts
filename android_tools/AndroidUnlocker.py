@@ -20,7 +20,7 @@
 # 2013-12-02    v1.0  Added file selection dialogs
 # 2013-11-27    v1.0  Initial release
 
-version = "1.6"
+version = "1.7"
 
 import argparse, sys, re, sqlite3, itertools, os
 from binascii import hexlify
