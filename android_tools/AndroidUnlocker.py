@@ -3,7 +3,7 @@
 #: Title    : AndroidUnlocker.py
 #: Date     : 2015-10-26
 #: Author   : "John Lehr" <slo.sleuth@gmail.com>
-#: Version  : 2.0
+#: Version  : 2.1
 #: License  : GPLv2 <http://www.gnu.org/licenses/gpl-2.0.html>
 #: Desc     : scan Android binary NAND dump for gesture/password keys
 #: Depends  : none
