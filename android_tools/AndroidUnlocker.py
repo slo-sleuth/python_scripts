@@ -3,167 +3,202 @@
 #: Title    : AndroidUnlocker.py
 #: Date     : 2015-10-26
 #: Author   : "John Lehr" <slo.sleuth@gmail.com>
-#: Version  : 1.7
+#: Version  : 2.0
 #: License  : GPLv2 <http://www.gnu.org/licenses/gpl-2.0.html>
-#: Desc     : scan Android binary dump for gesture/password keys
-#: Depends  : python3-tk
+#: Desc     : scan Android binary NAND dump for gesture/password keys
+#: Depends  : none
 
-#: Copyright: 2014 "John Lehr" <slo.sleuth@gmail.com>
+#: Copyright: 2015 "John Lehr" <slo.sleuth@gmail.com>
 
-# 2015-10-26    v1.7  Fix for block_sz with spare are included in page
-# 2015-06-06    v1.6  Fix for gesture.key detection, false hit reporting
-# 2015-03-26    v1.5  Fix for detecting AndroidGesturePatternTable.sqlite
-# 2014-11-04    v1.4  General code cleanup, truncated salt detection
-# 2014-03-24    v1.3  Bugfix for salt detection, added field length reading
-# 2013-12-18    v1.2  Bugfix in password dictionary
-# 2013-12-02    v1.1  Added hashcat hints
-# 2013-12-02    v1.0  Added file selection dialogs
-# 2013-11-27    v1.0  Initial release
-
-version = "1.7"
-
-import argparse, sys, re, sqlite3, itertools, os
+import argparse
+import sys
+import array
+import itertools
+import hashlib
+import re
 from binascii import hexlify
 from datetime import datetime
 from struct import pack
-from os import path
-from tkinter import filedialog
+
+version = '2.1'
+pwd_regex = re.compile(b'([0-9A-F]{40})([0-9A-F]{32})?')
+salt_regex = re.compile(b'lockscreen.password_salt(\-?[0-9]+)')
+active_pwd_regex = re.compile(b'(<active-password)(.*?)(/>)')
+failed_pwd_regex = re.compile(b'(<failed-password-attempts)(.*?)(/>)')
+
+class NandPage:
+    '''Class to search NAND pages from Android devices for hashes and salt
+    values related to the pattern, pin, and password screen locks.'''
+
+    def __init__(self, data, offset=0):
+        self.data = data
+        self.offset = offset
+        self.pattern = None
+        self.sha1 = None
+        self.md5  = None
+        self.salt = None
+        self.salthex = None
+        self.active_pwd = None
+        self.failed_pwd = None
+        self.isgesture = None
+        self.ispassword = None
+        self.issalt = None
+        self.istruncatedsalt = None
+        self.isactivepwd = None
+        self.isfailedpwd = None
+
+    def __str__(self):
+        '''Return string representation of NandPage object.'''
+        if self.isgesture:
+            text = 'gesture.key   at offset {}: {}'.format(self.offset, 
+                    self.sha1)
+        if self.ispassword:
+            text = 'password.key  at offset {}: {}'.format(self.offset,
+                    self.sha1 + self.md5)
+        if self.issalt:
+            text = 'password_salt at offset {}: {}'.format(self.offset, 
+                    self.salt)
+        if self.istruncatedsalt:
+            text = 'truncated salt at offset {}: {}'.format(self.offset,
+                    self.salt)
+        if self.isactivepwd or self.isfailedpwd:
+            text = 'device policies at offset {}: {}'.format(self.offset,
+                    self.active_pwd)
+        return text
+
+    def get_gesture(self, patterns):
+        '''Set sha1, pattern, and isgesture attributes if page contains a
+        gesture.key hash.  Hash is validated by patterns dictionary.'''
+        # check for 20 byte hash followed by nulls
+        if self.data[:20] != b'\x00' * 20 and self.data[20:40] == b'\x00' * 20:
+            # if present, possible gesture.key sha1 hash.  Validate with
+            # patterns dictionary
+            sha1 = hexlify(self.data[:20]).decode()
+            pattern = patterns.get(sha1, None)
+            # if valid, update attributes
+            if pattern:
+                self.sha1 = sha1
+                self.pattern = pattern
+                self.isgesture = True
+        return
+
+    def get_password(self):
+        '''Set sha1, md5 and ispassword if page contains a password.key hash.
+        '''
+        # check for sequence of 56 nulls starting at offset 72
+        if self.data[:72] != b'\x00' * 72 and self.data[72:80] == b'\x00' * 8:
+            # if present, possible password.key sha1|md5 in first 72 bytes
+            match = pwd_regex.match(self.data[:72])
+            # if ascii hexadecimal values are detected, update attributes
+            if match:
+                self.sha1 = match.group(1).decode()
+                self.md5  = match.group(2)
+                self.ispassword = True
+                # Don't update self.md5 for Samsung complex hash (no MD5
+                # present in passwork.key)
+                if self.md5:
+                    self.md5 = self.md5.decode()
+                else:
+                    self.md5 = ''
+        return
+
+    def get_salt(self):
+        '''Set salt, salthex, and issalt attributes if page contains a password
+        salt.  Offset is updated from page start to salt insteger start.'''
+        # salt is contained in SQLite database.  The value is preceded by
+        # name 'lockscreen.password_salt'
+        match = salt_regex.search(self.data)
+        # If salt validated detected, update attributes
+        if match:
+            salt = match.group(1)
+            salt_len = self.data[match.start(0)-1]
+            salt_len = (salt_len - 13) // 2
+            if len(salt) == salt_len:
+                self.salt = int(salt)
+                self.offset = match.start(1) + self.offset
+                self.salthex = hexlify(pack('>q', self.salt)).decode().\
+                               lstrip('0')
+                self.issalt = True
+            else:
+                self.istruncatedsalt = True
+                self.salt = int(salt)
+        return
+
+    def get_device_policies(self):
+        '''Set device policies XML string (length, character types...) if page contains 
+        corresponding XML tags.'''
+        # device policies are contained in an XML file named device_policies.xml
+        # the password policies can be identified with the "<active-password" tag
+        match = active_pwd_regex.search(self.data)
+        # If device policies validated detected, update attributes
+        if match:
+            self.active_pwd = match.group(2).decode().strip()
+            self.isactivepwd = True
+        # the failed password attempts can be identified with the "<failed-password-attempts" tag
+        match = failed_pwd_regex.search(self.data)
+        # If device policies validated detected, update attributes
+        if match:
+            self.failed_pwd = match.group(2).decode().strip()
+            self.isfailedpwd = True
+        return
+        
+def build_pattern_dict():
+    '''Return a dictionary of hash:pattern items for decoding gesture.key
+    sha1 hash values.'''
+
+    # Pattern is made of points 0-8
+    points = [i for i in range(0,9)]
+
+    # create a dictionary of pattern hashes
+    patterns = dict()
+    for length in range(4, 10):
+        for pattern in itertools.permutations(points, length):
+            pattern_bytes = array.array('B', pattern).tobytes()
+            sha1 = hashlib.sha1()
+            sha1.update(pattern_bytes)
+            patterns[sha1.hexdigest()] = pattern
+
+    return patterns
 
 def calculate_spare(page_size):
-    '''(int) -> int
-
-    Calculate spare are size based in NAND flash page size.
-
-    >>> calculate_spare(512)
-    16
-    >>> calculate_spare(2048)
-    64
-    '''
+    '''Return int representing proper NAND spare area for page_size.'''
     page_size = validate_page_size(page_size)
     return page_size // 512 * 16
 
-def find_gesture_hash(data):
-    '''(bytes) -> str
-
-    Regex search of data for 20b SHA1 value at the beginning of the data
-    block followed by a series of \x00.  Return the SHA1 hash value.
-
-    >>> find_gesture_hash(data_block)
-    '30c70ca3ed4b3c56c326937024a5fea4f8c41360'
-    '''
-
-    gesture_regex = re.compile(b'(.{20})\x00{108}')
-    match = gesture_regex.match(data)
-    if match and match.group(1) != b'\x00' * 20:
-        return hexlify(match.group(1)).decode()
-
-def find_password_hash(data):
-    '''(bytes) -> tuple
-    Return a tuple of SHA1, MD5 hash from data where the hashes occur at
-    the beginning of the data and are followed by nulls.  MD5 may be
-    missing the event of a SAMSUNG complex hash.
-
-    Precondition: data is at least the first 128 bytes of a NAND flash
-    memory page.
-
-    >>> find_password_hash(data_block)
-    ('F07450568EEDCA7A4DC4B8700A96C2FBB3FA6E9C', '7A27D7E1EE84F99DF6F10C511B5B26B6')
-    >>> find_password_hash(data_block)
-    ('F07450568EEDCA7A4DC4B8700A96C2FBB3FA6E9C', NONE)
-    '''
-
-    passwd_regex = re.compile(b'([0-9A-F]{40})([0-9A-F]{32})?\x00{56}')
-    match = passwd_regex.match(data)
-    if match:
-        sha1 = match.group(1).decode()
-        md5  = match.group(2)
-        if md5:
-            md5 = md5.decode()
-        return sha1, md5
-    return
-
-def find_salt(data, offset):
-    '''(bytes) -> int, int
-
-    Search bytes for salt values from sqlite memory pages and return page offset
-    and salt value.
-
-    >>> find_salt(binary_data)
-    (594, -4561001319859322107)
-    '''
-
-    salt = re.compile(b'(lockscreen\.password_salt)(\-?[0-9]+)')
-    match = salt.search(data)
-
-    if match:
-        salt = match.group(2)
-        offset = match.start(2) + offset
-
-        # validate salt from record header length value
-        salt_len = data[match.start(1)-1]
-        salt_len = (salt_len - 13) // 2
-
-        if salt_len != len(salt):
-            print('\tTruncated salt found at offset {}'.format(offset))
-            return
-
-        return int(salt), offset
-
-def gesture_lookup(sha1, db):
-    '''(str, file obj) -> list of int
-
-    Lookup sha1 in db and return pattern in a list.
-
-    Precondition: db is a sqlite database created with the
-    GenerateAndroidGesturePatternTable.py script.
-
-    >>> gesture_lookup('30c70ca3ed4b3c56c326937024a5fea4f8c41360', db)
-    [3, 0, 1, 6]
-    '''
-
-    conn = sqlite3.connect(db)
-    cursor = conn.cursor()
-
-    cursor.execute('SELECT pattern FROM RainbowTable WHERE hash = "{}"'.
-        format(sha1))
-    pattern = cursor.fetchone()
-    if pattern:
-        return pattern[0]
-
 def get_time():
+    '''Return the current date and time in YYYY-MM-DD hh:mm:ss format.'''
     return str(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
 def validate_page_size(size):
-    '''(int) -> int
-
-    Check that size is a multiple of 512
-
-    >>> validate_page_size(1024)
-    1024
-    >>> validate_page_size(1025)
-    ERROR: 1025 not a valid page size'''
-
+    '''Return size if divisible by 512 or exit.'''
     if size % 512 == 0:
         return size
     else:
         print('ERROR: {} not a valid page size'.format(size))
         sys.exit(1)
 
+def add_value(dictionary, key, value):
+    '''Add new key:[value] to dictionary if not already present.  Append value
+    to existing list is key is present.'''
+    if key in dictionary.keys():
+        dictionary[key].append(value)
+    else:
+        dictionary[key] = [value]
+
 def main():
     parser = argparse.ArgumentParser(
         description='Find and Android lockscreen hashes and password salt.',
         epilog='This application searches for SHA1 and MD5 hash values in raw \
-        NAND dumps and, if appropriate, queries a SQLite rainbow table for \
-        matching gestures.  A rainbow table such as \
-        "AndroidGesturePatternTable.sqlite" rainbow table is required for \
-        gesture pattern lookup.  Incorrect page size can lead to truncated \
-        salt results.')
+        NAND dumps and, if appropriate returns matching gestures.  Incorrect \
+        page size can lead to truncated salt results.')
 
     parser.add_argument('BIN', help='Raw data from Android NAND Flash')
     parser.add_argument('-g', '--gesture', dest='gesture', action='store_true',
-        help='Search for gesture.key and lookup pattern in DB')
-    parser.add_argument('-p', '--password', dest='password', action='store_true',
-        help='Search for password.key hash and salt')
+        help='Search for gesture.key and print pattern')
+    parser.add_argument('-p', '--password', dest='password',
+        action='store_true', help='Search for password.key hash and salt')
+    parser.add_argument('-n', '--no_progress', dest='progress',
+        action='store_false', default=True, help='Show progress of search')
     parser.add_argument('-s', '--size', dest='size', metavar='N', default=2048,
         type=int, help='NAND flash page size, default=2048')
     parser.add_argument('-S', '--spare', dest='spare', action='store_true',
@@ -172,133 +207,129 @@ def main():
         version='%(prog)s v.' + version)
 
     args = parser.parse_args()
-
-    # check user arguments
-    validate_page_size(args.size)
-    if args.spare:
-        block_sz = args.size + calculate_spare(args.size)
-    else:
-        block_sz = args.size
-        
+    
     if not args.gesture and not args.password:
-        print('\nerror: Search type not specified.  Select -g gesture or \
--p password.')
+        print('error: search type not specified')
         sys.exit(1)
 
-    # prompt for BIN file if not provided by user
-    if not path.isfile(args.BIN):
-        args.BIN = filedialog.askopenfilename(title='Select BIN file')
+    #open file and cal
+    nand = open(args.BIN, 'rb')
+    nand.size = nand.seek(0,2)
+    nand.seek(0)
 
-    # locate rainbow table for gesture lookup
+    # ensure user entered a proper page size, else exit
+    #validate_page_size(args.size)
+
+    args.size = validate_page_size(args.size)
+    nand.pagecount = nand.size//args.size
+
+    # print search information
+    print('\nSearching file:\t', nand.name)
+    print('Page size:\t', args.size)
+
+    # add spare area if user selected
+    if args.spare:
+        spare = calculate_spare(args.size)
+        args.size = args.size + spare
+        print('Spare area:\t', spare, 'bytes added to page')
+    if args.password:
+        print('Search type:\t password.key')
     if args.gesture:
-        # first check in current path of script
-        script_path = path.dirname(path.realpath(__file__))
-        db = script_path + path.sep + 'AndroidGesturePatternTable.sqlite'
+        print('Search type:\t gesture.key')
+        print('\nBuilding gesture dictionary: ', end='')
+        patterns = build_pattern_dict()
+        print(len(patterns), 'patterns')
 
-        # if not in script path, raise a file selection box
-        if not path.isfile(db):
-            db = filedialog.askopenfilename(title='Select Database')
-            if not db:
-                print('ERROR: No database file selected')
-                sys.exit(1)
 
-    print('\nSearch started at {}'.format(get_time()))
-    print('\nProcessing:')
+    print('\nSearch started:', get_time(), '\n')
 
-    # open file and process on page at a time
-    file_obj =  open(args.BIN, 'rb') 
+    # loop through NAND pages
+    count = 1
+    results = dict()
+    while count <= nand.pagecount:
+        pageoffset = nand.tell()
+        page = NandPage(nand.read(args.size), pageoffset)
 
-    gesture_dict  = {}
-    password_dict = {}
-    salt_dict     = {}
-
-    #~ for offset in range(0, len(mm), block_sz) :
-        #~ block = mm[offset: offset + block_sz]
-    
-    while True:
-        offset = file_obj.tell()
-        block = file_obj.read(block_sz)
-        if not block:
-            break
-            
-        if args.password:
-            password = find_password_hash(block[:128])
-            if password:
-                if password in password_dict.keys():
-                    password_dict[password].append(offset)
-                else:
-                    password_dict[password] = [offset]
-                    print('\tUnique password.key found at offset {}'.
-                        format(offset))
-            salt = find_salt(block, offset)
-            if salt:
-                salt, offset = salt
-                if salt in salt_dict.keys():
-                    salt_dict[salt].append(offset)
-                else:
-                    salt_dict[salt] = [offset]
-                    print('\tUnique salt found at offset {}'.format(offset))
+        # show progress
+        if args.progress:
+            text = '\rProcessing page {:,} of {:,} '.format(count,
+                    nand.pagecount)
+            sys.stdout.write(text)
+        #sys.stdout.flush()
 
         if args.gesture:
-            gesture = find_gesture_hash(block[:128])
-            if gesture:
-                pattern = gesture_lookup(gesture, db)
-                if gesture in gesture_dict.keys() and pattern:
-                    gesture_dict[gesture].append(offset)
-                elif pattern:
-                    gesture_dict[gesture] = [offset]
-                    print('\tPossible gesture.key found at offset {}'.
-                        format(offset))
+            page.get_gesture(patterns)
+            if page.isgesture:
+                add_value(results, page.sha1, (page, page.offset))
+                text = '\r    {}\n'.format(str(page).split(':')[0])
+                sys.stdout.write(text)
+                continue
+        if args.password:
+            page.get_password()
+            if page.ispassword:
+                add_value(results, page.sha1, (page, page.offset))
+                text = '\r    {}\n'.format(str(page).split(':')[0])
+                sys.stdout.write(text)
+                continue
 
-    print('\nSearch completed at {}'.format(get_time()))
+            page.get_device_policies()
+            if page.isactivepwd or page.isfailedpwd:
+                add_value(results, "device_policies", (page, page.offset))
+                text = '\r  {}\n'.format(str(page).split(':')[0])
+                sys.stdout.write(text)
+                continue
 
-    # print search results
-    print('\nSearch Results:')
-    for password in password_dict.keys():
+            page.get_salt()
+            if page.issalt:
+                add_value(results, page.salt, (page, page.offset))
+                text = '\r    {}\n'.format(str(page).split(':')[0])
+                sys.stdout.write(text)
+            if page.istruncatedsalt:
+                text = '\r    {}\n'.format(str(page).split(':')[0])
+                sys.stdout.write(text)
+        count += 1
+
+    print('\r', ' '* 72)
+    print('Search stopped:', get_time())
+    print()
+
+    # print results
+
+    print('RESULTS:\n')
+    if not results:
+        print('No lockscreen data found.\n')
+        sys.exit(0)
+    for result in results.values():
+        offsets = []
+        for page, offset in result:
+            offsets.append(offset)
+        if page.isgesture:
+            print('gesture.key')
+            print('SHA1 Hash:\t', page.sha1)
+            print('Pattern:  \t', ', '.join(str(p) for p in page.pattern))
+        if page.ispassword:
+            print('password.key')
+            print('SHA1 Hash:\t', page.sha1)
+            print('MD5 Hash: \t', page.md5)
+        if page.issalt:
+            print('lockscreen.password_salt')
+            print('Salt:    \t', page.salt)
+            print('Salt Hex:\t', page.salthex)
+        if page.isactivepwd or page.isfailedpwd:
+            print('device_policies.xml')
+            if page.isactivepwd:    
+                print('active-password:\t\t', page.active_pwd)
+            if page.isfailedpwd:
+                print('failed-password-attempts:\t', page.failed_pwd)
+        print('Offset(s):\t', ', '.join(str(offset) for offset in offsets))
+
+        if page.ispassword and page.md5:
+            print('=== [HINT] ===\t Standard password.key, use MD5 with \
+hashcat mode -m10')
+        if page.ispassword and not page.md5:
+            print('=== [HINT] ===\t Samsung complex hash, use SHA1 with \
+hashcat mode -m5800')
         print()
-        sha1 = password[0]
-        md5 = password[1]
-        print('SHA1:\t\t{}'.format(sha1))
-        if not md5 == '\x00' * 32:
-            print('MD5:\t\t{}'.format(md5))
-        offsets = ', '.join(str(x) for x in password_dict[password])
-        print('Offset(s):\t{}'.format(offsets))
 
-        # print hashcat hint
-        if md5:
-            print('=== [HINT] === \tStandard password.key, use MD5 with hashcat mode -m10')
-        else:
-            print('=== [HINT] === \tSamsung complex hash, use SHA1 with hashcat mode -m5800')
-
-    for salt in salt_dict.keys():
-        print()
-        salt_hex = hexlify(pack('>q', salt)).decode().lstrip('0')
-        print('SALT: \t\t{}\nSALT Hex:\t{}'.format(salt, salt_hex))
-        offsets = ', '.join(str(x) for x in salt_dict[salt])
-        print('Offset(s):\t{}'.format(offsets))
-
-    message = 0
-    for gesture in gesture_dict.keys():
-        pattern = gesture_lookup(gesture, db)
-        if pattern:
-            print()
-            print('gesture.key: \t{}\nPattern: \t{}'.format(gesture, pattern))
-            offsets = ', '.join(str(x) for x in gesture_dict[gesture])
-            print('Offset(s):\t{}'.format(offsets))
-            message = 1
-        elif not message == 1:
-            message = 2
-
-    # print message if no password.key hash found
-    if args.password and not password_dict:
-        print()
-        print('No password.key located in ' + args.BIN)
-
-    # print message if no valid gesture.key hash found
-    if message == 2:
-        print()
-        print('No valid gesture.key found in ' + args.BIN)
-
-    return 0
 if __name__ == '__main__':
     main()
